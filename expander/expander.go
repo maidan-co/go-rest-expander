@@ -24,6 +24,10 @@ const (
 	COLLECTION_KEY = "Collection"
 )
 
+const (
+	emptyTimeValue = "0001-01-01T00:00:00Z"
+)
+
 type Configuration struct {
 	UsingCache           bool
 	UsingMongo           bool
@@ -268,10 +272,12 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 	}
 
 	//	var resultWriteMutex = sync.Mutex{}
-	var writeToResult = func(key string, value interface{}) {
-		//resultWriteMutex.Lock()
-		result[key] = value
-		//resultWriteMutex.Unlock()
+	var writeToResult = func(key string, value interface{}, omitempty bool) {
+		if omitempty && isEmptyValue(reflect.ValueOf(value)) {
+			delete(result, key)
+		}else {
+			result[key] = value
+		}
 	}
 
 	// check if root is db ref
@@ -293,12 +299,20 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 		if f.Kind() == reflect.Ptr {
 			f = f.Elem()
 		}
+		var omitempty = false
 
 		key := ft.Name
 		tag := ft.Tag.Get("json")
 		if tag != "" {
-			key = strings.Split(tag, ",")[0]
+			tags := strings.Split(tag, ",")
+			key = tags[0]
+			for _, currentPart := range tags {
+				if currentPart == "omitempty" {
+					omitempty = true
+				}
+			}
 		}
+
 
 		options := func() (bool, string) {
 			return recursive, key
@@ -309,21 +323,21 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 				uri := buildReferenceURI(f)
 				resource, ok := getResourceFrom(uri, filters.Get(key).Children, recursive)
 				if ok && len(resource) > 0 {
-					writeToResult(key, resource)
+					writeToResult(key, resource, omitempty)
 				}else {
-					writeToResult(key, f.Interface())
+					writeToResult(key, f.Interface(), omitempty)
 				}
 			} else {
-				writeToResult(key, f.Interface())
+				writeToResult(key, f.Interface(), omitempty)
 			}
 		} else {
 			val := getValue(f, filters, options)
-			writeToResult(key, val)
+			writeToResult(key, val, omitempty)
 			switch val.(type) {
 			case string:
 				unquoted, err := strconv.Unquote(val.(string))
 				if err == nil {
-					writeToResult(key, unquoted)
+					writeToResult(key, unquoted, omitempty)
 				}
 			}
 
@@ -332,7 +346,7 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 					uri := getReferenceURI(f)
 					resource, ok := getResourceFrom(uri, filters.Get(key).Children, recursive)
 					if ok {
-						writeToResult(key, resource)
+						writeToResult(key, resource, omitempty)
 					}
 				}
 			}
@@ -713,4 +727,25 @@ func buildFilterTree(statement string) ([]Filter, int) {
 	}
 
 	return result, -1
+}
+
+// this function is a modification from isEmptyValue in json/encode.go
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice:
+		return v.Len() == 0
+	case reflect.String:
+		return v.Len() == 0 || v.Interface() == emptyTimeValue
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	}
+	return false
 }

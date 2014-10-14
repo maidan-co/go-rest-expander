@@ -512,6 +512,20 @@ func TestExpander(t *testing.T) {
 					So(mongoRef["Database"], ShouldEqual, simple.Ref.Database)
 				})
 
+			Convey("Expand should remove field when 'omitempty' tag is set and the value is empty value", func() {
+					emptyStringValue := ""
+					simple := SimpleWithDBRef{Name: emptyStringValue, Ref: DBRef{"a collection", "an id", "a database"}}
+
+					result := Expand(simple, "*", "")
+					mongoRef := result["Ref"].(map[string]interface{})
+
+					_, ok := result["name"]
+					So(ok, ShouldBeFalse)
+					So(mongoRef["Collection"], ShouldEqual, simple.Ref.Collection)
+					So(mongoRef["Id"], ShouldEqual, simple.Ref.Id)
+					So(mongoRef["Database"], ShouldEqual, simple.Ref.Database)
+				})
+
 			Convey("Fetching should return the same value when Mongo flag is set to false", func() {
 					simple := SimpleWithDBRef{Name: "foo", Ref: DBRef{"a collection", "an id", "a database"}}
 
