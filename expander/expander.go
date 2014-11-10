@@ -2,8 +2,10 @@ package expander
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -11,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"net"
-	"errors"
 
 	"github.com/golang/groupcache/lru"
 )
@@ -31,15 +31,15 @@ const (
 type Configuration struct {
 	UsingCache           bool
 	UsingMongo           bool
-	IdURIs            map[string]string
+	IdURIs               map[string]string
 	CacheExpInSeconds    int64
 	ConnectionTimeoutInS int
 }
 
 var ExpanderConfig Configuration = Configuration{
-	UsingMongo:        false,
-	UsingCache:        false,
-	CacheExpInSeconds: 86400, // = 24 hours
+	UsingMongo:           false,
+	UsingCache:           false,
+	CacheExpInSeconds:    86400, // = 24 hours
 	ConnectionTimeoutInS: 2,
 }
 
@@ -58,7 +58,7 @@ func dialTimeout(network, addr string) (net.Conn, error) {
 func Init() {
 	client = http.Client{}
 
-	client.Timeout = time.Duration(ExpanderConfig.ConnectionTimeoutInS)*time.Second
+	client.Timeout = time.Duration(ExpanderConfig.ConnectionTimeoutInS) * time.Second
 
 	httpClientIsInitialized = true
 }
@@ -153,7 +153,7 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 		fmt.Printf("Warning: Filter was not correct, expansionFilter: '%v' fieldFilter: '%v', error: %v \n", expansion, fields, err)
 	}
 
-	expanded := *walkByExpansion(data, expansionFilter, recursiveExpansion)
+	expanded := walkByExpansion(data, expansionFilter, recursiveExpansion)
 
 	filtered := walkByFilter(expanded, fieldFilter)
 
@@ -193,7 +193,7 @@ func ExpandArray(data interface{}, expansion, fields string) []interface{} {
 
 	v = v.Slice(0, v.Len())
 	for i := 0; i < v.Len(); i++ {
-		arrayItem := *walkByExpansion(v.Index(i), expansionFilter, recursiveExpansion)
+		arrayItem := walkByExpansion(v.Index(i), expansionFilter, recursiveExpansion)
 		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
 	}
@@ -229,23 +229,23 @@ func walkByFilter(data map[string]interface{}, filters Filters) map[string]inter
 				switch ft.Index(0).Kind() {
 				case reflect.Map:
 					children := make([]map[string]interface{}, 0)
-				for _, child := range v.([]map[string]interface{}) {
-					item := walkByFilter(child, subFilters)
-					children = append(children, item)
-				}
+					for _, child := range v.([]map[string]interface{}) {
+						item := walkByFilter(child, subFilters)
+						children = append(children, item)
+					}
 					result[k] = children
 				default:
 					children := make([]interface{}, 0)
-				for _, child := range v.([]interface{}) {
-					cft := reflect.TypeOf(child)
+					for _, child := range v.([]interface{}) {
+						cft := reflect.TypeOf(child)
 
-					if cft.Kind() == reflect.Map {
-						item := walkByFilter(child.(map[string]interface{}), subFilters)
-						children = append(children, item)
-					} else {
-						children = append(children, child)
+						if cft.Kind() == reflect.Map {
+							item := walkByFilter(child.(map[string]interface{}), subFilters)
+							children = append(children, item)
+						} else {
+							children = append(children, child)
+						}
 					}
-				}
 					result[k] = children
 				}
 			}
@@ -255,11 +255,11 @@ func walkByFilter(data map[string]interface{}, filters Filters) map[string]inter
 	return result
 }
 
-func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[string]interface{} {
+func walkByExpansion(data interface{}, filters Filters, recursive bool) map[string]interface{} {
 	result := make(map[string]interface{})
 
 	if data == nil {
-		return &result
+		return result
 	}
 
 	v := reflect.ValueOf(data)
@@ -275,7 +275,7 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 	var writeToResult = func(key string, value interface{}, omitempty bool) {
 		if omitempty && isEmptyValue(reflect.ValueOf(value)) {
 			delete(result, key)
-		}else {
+		} else {
 			result[key] = value
 		}
 	}
@@ -289,7 +289,7 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 		for k, v := range resource {
 			placeholder[k] = v
 		}
-		return &placeholder
+		return placeholder
 	}
 
 	for i := 0; i < v.NumField(); i++ {
@@ -313,7 +313,6 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 			}
 		}
 
-
 		options := func() (bool, string) {
 			return recursive, key
 		}
@@ -324,7 +323,7 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 				resource, ok := getResourceFrom(uri, filters.Get(key).Children, recursive)
 				if ok && len(resource) > 0 {
 					writeToResult(key, resource, omitempty)
-				}else {
+				} else {
 					writeToResult(key, f.Interface(), omitempty)
 				}
 			} else {
@@ -354,7 +353,7 @@ func walkByExpansion(data interface{}, filters Filters, recursive bool) *map[str
 
 	}
 
-	return &result
+	return result
 }
 
 func getValue(t reflect.Value, filters Filters, options func() (bool, string)) interface{} {
@@ -408,10 +407,10 @@ func getValue(t reflect.Value, filters Filters, options func() (bool, string)) i
 	case reflect.Map:
 		result := make(map[string]interface{})
 
-	for _, v := range t.MapKeys() {
-		key := v.Interface().(string)
-		result[key] = getValue(t.MapIndex(v), filters.Get(key).Children, options)
-	}
+		for _, v := range t.MapKeys() {
+			key := v.Interface().(string)
+			result[key] = getValue(t.MapIndex(v), filters.Get(key).Children, options)
+		}
 
 		return result
 	case reflect.Struct:
@@ -425,7 +424,7 @@ func getValue(t reflect.Value, filters Filters, options func() (bool, string)) i
 			return string(bytes)
 		}
 
-		return *walkByExpansion(t, filters, recursive)
+		return walkByExpansion(t, filters, recursive)
 	default:
 		return t.Interface()
 	}
@@ -446,14 +445,14 @@ func getResourceFrom(u string, filters Filters, recursive bool) (map[string]inte
 		}
 		ok = true
 		if hasReference(m) {
-			return *expandChildren(m, filters, recursive), ok
+			return expandChildren(m, filters, recursive), ok
 		}
 	}
 
 	return m, ok
 }
 
-func expandChildren(m map[string]interface{}, filters Filters, recursive bool) *map[string]interface{} {
+func expandChildren(m map[string]interface{}, filters Filters, recursive bool) map[string]interface{} {
 	result := make(map[string]interface{})
 
 	for key, v := range m {
@@ -475,7 +474,7 @@ func expandChildren(m map[string]interface{}, filters Filters, recursive bool) *
 		}
 	}
 
-	return &result
+	return result
 }
 
 func buildReferenceURI(t reflect.Value) string {
@@ -493,7 +492,7 @@ func buildReferenceURI(t reflect.Value) string {
 				objectId, ok := f.Interface().(ObjectId)
 				if ok {
 					base := ExpanderConfig.IdURIs[collection]
-					uri = base+"/"+objectId.Hex()
+					uri = base + "/" + objectId.Hex()
 				}
 			}
 		}
@@ -628,7 +627,6 @@ var makeGetCallAndAddToCache = func(uri *url.URL) string {
 	return valueToReturn
 }
 
-
 var getContentFrom = func(uri *url.URL) string {
 	if ExpanderConfig.UsingCache {
 		CacheMutex.Lock()
@@ -664,7 +662,7 @@ func validateFilterFormat(filter string) bool {
 	for i := range runes {
 		if runes[i] == '(' {
 			bracketCounter++
-		}else if runes[i] == ')' {
+		} else if runes[i] == ')' {
 			bracketCounter--
 			if bracketCounter < 0 {
 				return false
@@ -699,22 +697,22 @@ func buildFilterTree(statement string) ([]Filter, int) {
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			filter.Children, closeIndex = buildFilterTree(statement[i+1:])
 			result = append(result, filter)
-			i = i+closeIndex
-			indexAfterSeparation = i+1
+			i = i + closeIndex
+			indexAfterSeparation = i + 1
 			closeIndex = indexAfterSeparation
 		case comma:
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			if filter.Value != "" {
 				result = append(result, filter)
 			}
-			indexAfterSeparation = i+1
+			indexAfterSeparation = i + 1
 		case closeBracket:
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			if filter.Value != "" {
 				result = append(result, filter)
 			}
 
-			return result, i+1
+			return result, i + 1
 		}
 	}
 
