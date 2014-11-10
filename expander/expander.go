@@ -115,20 +115,20 @@ func (m Filters) Get(v string) Filter {
 	return result
 }
 
-type ResolveTask struct {
-	DBRef   string
+type ExpansionTask struct {
+	DBRef   DBRef
 	Success func(value map[string]interface{})
 	Error   func()
 }
 
 type WalkStateHolder struct {
-	resolveTasks *[]ResolveTask
+	resolveTasks *[]ExpansionTask
 }
 
-func (this *WalkStateHolder) GetResolveTasks() []ResolveTask {
+func (this *WalkStateHolder) GetExpansionTasks() []ExpansionTask {
 	return *this.resolveTasks
 }
-func (this *WalkStateHolder) AddResolveTask(resolveTask ResolveTask) {
+func (this *WalkStateHolder) AddExpansionTask(resolveTask ExpansionTask) {
 	realArray := *this.resolveTasks
 	result := append(realArray, resolveTask)
 	*this.resolveTasks = result
@@ -172,23 +172,24 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 		fmt.Printf("Warning: Filter was not correct, expansionFilter: '%v' fieldFilter: '%v', error: %v \n", expansion, fields, err)
 	}
 
-	resolveTasks := []ResolveTask{}
+	resolveTasks := []ExpansionTask{}
 	walkStateHolder := WalkStateHolder{&resolveTasks}
 	expanded := walkByExpansion(data, walkStateHolder, expansionFilter, recursiveExpansion)
-	resolveURLS(walkStateHolder)
+	executeExpansionTasks(walkStateHolder)
 
 	filtered := walkByFilter(expanded, fieldFilter)
 
 	return filtered
 }
 
-func resolveURLS(walkStateHolder WalkStateHolder) {
-	resolveTasks := walkStateHolder.GetResolveTasks()
+func executeExpansionTasks(walkStateHolder WalkStateHolder) {
+	resolveTasks := walkStateHolder.GetExpansionTasks()
 	for _, task := range resolveTasks {
-		value, ok := getResourceFrom(task.DBRef, Filters{}, true)
-		if !ok {
+		link := buildReferenceURI(reflect.ValueOf(task.DBRef))
+		value, ok := getResourceFrom(link, Filters{}, true)
+		if !ok && task.Error != nil {
 			task.Error()
-		} else {
+		} else if task.Success != nil {
 			task.Success(value)
 		}
 	}
@@ -227,10 +228,10 @@ func ExpandArray(data interface{}, expansion, fields string) []interface{} {
 
 	v = v.Slice(0, v.Len())
 	for i := 0; i < v.Len(); i++ {
-		resolveTasks := []ResolveTask{}
+		resolveTasks := []ExpansionTask{}
 		walkStateHolder := WalkStateHolder{&resolveTasks}
 		arrayItem := walkByExpansion(v.Index(i), walkStateHolder, expansionFilter, recursiveExpansion)
-		resolveURLS(walkStateHolder)
+		executeExpansionTasks(walkStateHolder)
 		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
 	}
@@ -318,19 +319,18 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 	}
 
 	// check if root is db ref
-	if isMongoDBRef(v) && recursive {
+	if dbref, ok := asMongoDBRef(v); ok && recursive {
 		placeholder := make(map[string]interface{})
 
-		dbRef := buildReferenceURI(v)
-		var resolveTask ResolveTask
+		var resolveTask ExpansionTask
 
-		resolveTask.DBRef = dbRef
+		resolveTask.DBRef = dbref
 		resolveTask.Success = func(value map[string]interface{}) {
 			for k, v := range value {
 				placeholder[k] = v
 			}
 		}
-		walkStateHolder.AddResolveTask(resolveTask)
+		walkStateHolder.AddExpansionTask(resolveTask)
 		return placeholder
 	}
 
@@ -359,18 +359,18 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 			return recursive, key
 		}
 
-		if isMongoDBRef(f) {
+		if dbref, ok := asMongoDBRef(f); ok {
 			if filters.Contains(key) || recursive {
 
-				var resolveTask ResolveTask
-				resolveTask.DBRef = buildReferenceURI(f)
+				var resolveTask ExpansionTask
+				resolveTask.DBRef = dbref
 				resolveTask.Success = func(value map[string]interface{}) {
 					writeToResult(key, value, omitempty)
 				}
 				resolveTask.Error = func() {
 					writeToResult(key, f.Interface(), omitempty)
 				}
-				walkStateHolder.AddResolveTask(resolveTask)
+				walkStateHolder.AddExpansionTask(resolveTask)
 
 			} else {
 				writeToResult(key, f.Interface(), omitempty)
@@ -432,17 +432,17 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 					if ok {
 						result[i] = resource
 					}
-				} else if isMongoDBRef(current) {
+				} else if dbref, ok := asMongoDBRef(current); ok && recursive {
 					//leave as placeholder
 					result = append(result, current.Interface())
 
-					var resolveTask ResolveTask
+					var resolveTask ExpansionTask
 					var localCounter = i
-					resolveTask.DBRef = buildReferenceURI(current)
+					resolveTask.DBRef = dbref
 					resolveTask.Success = func(resolvedValue map[string]interface{}) {
 						result[localCounter] = resolvedValue
 					}
-					walkStateHolder.AddResolveTask(resolveTask)
+					walkStateHolder.AddExpansionTask(resolveTask)
 
 				} else {
 					result = append(result, getValue(current, walkStateHolder, filters.Get(parentKey).Children, options))
@@ -572,31 +572,40 @@ func buildReferenceURI(t reflect.Value) string {
 	return uri
 }
 
-func isMongoDBRef(t reflect.Value) bool {
+func asMongoDBRef(t reflect.Value) (DBRef, bool) {
 	mongoEnabled := ExpanderConfig.UsingMongo && len(ExpanderConfig.IdURIs) > 0
+	var dbref DBRef
 
 	if !mongoEnabled {
-		return false
+		return dbref, false
 	}
 
-	if t.Kind() == reflect.Struct {
-		if t.NumField() != 3 {
-			return false
-		}
+	if t.Kind() != reflect.Struct {
+		return dbref, false
 
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
+	}
 
-			if f.CanInterface() {
-				_, ok := f.Interface().(ObjectId)
-				if ok {
-					return true
-				}
+	if t.NumField() != 3 {
+		return dbref, false
+	}
+
+	idFound := false
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		ft := t.Type().Field(i)
+
+		if ft.Name == COLLECTION_KEY {
+			dbref.Collection = f.String()
+		} else if f.CanInterface() {
+			objectId, ok := f.Interface().(ObjectId)
+			if ok {
+				dbref.Id = objectId
+				idFound = true
 			}
 		}
 	}
-
-	return false
+	ok := dbref.Collection != "" && idFound
+	return dbref, ok
 }
 
 func isRefKey(ft reflect.StructField) bool {
