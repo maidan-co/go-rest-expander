@@ -116,26 +116,22 @@ func (m Filters) Get(v string) Filter {
 }
 
 type ResolveTask struct {
-	DBRef   DBRef
+	DBRef   string
 	Success func(value map[string]interface{})
 	Error   func()
 }
 
 type WalkStateHolder struct {
-	Result       map[string]interface{}
-	ResolveTasks **[]ResolveTask
+	resolveTasks *[]ResolveTask
 }
 
-func (this *WalkStateHolder) addResolveTask(resolveTask ResolveTask) {
-	if this.ResolveTasks == nil {
-		resolveTaskArray := []ResolveTask{}
-		pointerA := &resolveTaskArray
-		this.ResolveTasks = &pointerA
-	}
-	realArray := **this.ResolveTasks
+func (this *WalkStateHolder) GetResolveTasks() []ResolveTask {
+	return *this.resolveTasks
+}
+func (this *WalkStateHolder) AddResolveTask(resolveTask ResolveTask) {
+	realArray := *this.resolveTasks
 	result := append(realArray, resolveTask)
-	*this.ResolveTasks = &result
-
+	*this.resolveTasks = result
 }
 
 func resolveFilters(expansion, fields string) (expansionFilter Filters, fieldFilter Filters, recursiveExpansion bool, err error) {
@@ -176,12 +172,26 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 		fmt.Printf("Warning: Filter was not correct, expansionFilter: '%v' fieldFilter: '%v', error: %v \n", expansion, fields, err)
 	}
 
-	walkStateHolder := WalkStateHolder{}
+	resolveTasks := []ResolveTask{}
+	walkStateHolder := WalkStateHolder{&resolveTasks}
 	expanded := walkByExpansion(data, walkStateHolder, expansionFilter, recursiveExpansion)
+	resolveURLS(walkStateHolder)
 
 	filtered := walkByFilter(expanded, fieldFilter)
 
 	return filtered
+}
+
+func resolveURLS(walkStateHolder WalkStateHolder) {
+	resolveTasks := walkStateHolder.GetResolveTasks()
+	for _, task := range resolveTasks {
+		value, ok := getResourceFrom(task.DBRef, Filters{}, true)
+		if !ok {
+			task.Error()
+		} else {
+			task.Success(value)
+		}
+	}
 }
 
 func ExpandArray(data interface{}, expansion, fields string) []interface{} {
@@ -217,8 +227,10 @@ func ExpandArray(data interface{}, expansion, fields string) []interface{} {
 
 	v = v.Slice(0, v.Len())
 	for i := 0; i < v.Len(); i++ {
-		walkStateHolder := WalkStateHolder{}
+		resolveTasks := []ResolveTask{}
+		walkStateHolder := WalkStateHolder{&resolveTasks}
 		arrayItem := walkByExpansion(v.Index(i), walkStateHolder, expansionFilter, recursiveExpansion)
+		resolveURLS(walkStateHolder)
 		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
 	}
@@ -309,7 +321,7 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 	if isMongoDBRef(v) && recursive {
 		placeholder := make(map[string]interface{})
 
-		dbRef := buildDBReference(v)
+		dbRef := buildReferenceURI(v)
 		var resolveTask ResolveTask
 
 		resolveTask.DBRef = dbRef
@@ -318,7 +330,7 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 				placeholder[k] = v
 			}
 		}
-		walkStateHolder.addResolveTask(resolveTask)
+		walkStateHolder.AddResolveTask(resolveTask)
 		return placeholder
 	}
 
@@ -351,14 +363,14 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 			if filters.Contains(key) || recursive {
 
 				var resolveTask ResolveTask
-				resolveTask.DBRef = buildDBReference(f)
+				resolveTask.DBRef = buildReferenceURI(f)
 				resolveTask.Success = func(value map[string]interface{}) {
 					writeToResult(key, value, omitempty)
 				}
 				resolveTask.Error = func() {
 					writeToResult(key, f.Interface(), omitempty)
 				}
-				walkStateHolder.addResolveTask(resolveTask)
+				walkStateHolder.AddResolveTask(resolveTask)
 
 			} else {
 				writeToResult(key, f.Interface(), omitempty)
@@ -426,11 +438,11 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 
 					var resolveTask ResolveTask
 					var localCounter = i
-					resolveTask.DBRef = buildDBReference(current)
+					resolveTask.DBRef = buildReferenceURI(current)
 					resolveTask.Success = func(resolvedValue map[string]interface{}) {
 						result[localCounter] = resolvedValue
 					}
-					walkStateHolder.addResolveTask(resolveTask)
+					walkStateHolder.AddResolveTask(resolveTask)
 
 				} else {
 					result = append(result, getValue(current, walkStateHolder, filters.Get(parentKey).Children, options))
