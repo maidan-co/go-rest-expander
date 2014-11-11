@@ -31,6 +31,7 @@ const (
 type Configuration struct {
 	UsingCache           bool
 	UsingMongo           bool
+	MakeBulkRequest      bool
 	IdURIs               map[string]string
 	CacheExpInSeconds    int64
 	ConnectionTimeoutInS int
@@ -72,6 +73,18 @@ type DBRef struct {
 	Collection string
 	Id         interface{}
 	Database   string
+}
+
+type MongoObject struct {
+	Id string `json:"_id"`
+}
+
+type BulkResponseMongoObject struct {
+	Data []MongoObject `json:"data"`
+}
+
+type BulkResponseData struct {
+	Data []map[string]interface{} `json:"data"`
 }
 
 type ObjectId interface {
@@ -116,9 +129,15 @@ func (m Filters) Get(v string) Filter {
 }
 
 type ExpansionTask struct {
-	DBRef   DBRef
-	Success func(value map[string]interface{})
-	Error   func()
+	Id            string
+	Collection    string
+	OriginalDBRef DBRef
+	Success       func(value map[string]interface{})
+	Error         func()
+}
+
+func (this *ExpansionTask) ResourceKey() string {
+	return UniqueKey(this.Collection, this.Id)
 }
 
 type WalkStateHolder struct {
@@ -128,10 +147,15 @@ type WalkStateHolder struct {
 func (this *WalkStateHolder) GetExpansionTasks() []ExpansionTask {
 	return *this.resolveTasks
 }
+
 func (this *WalkStateHolder) AddExpansionTask(resolveTask ExpansionTask) {
 	realArray := *this.resolveTasks
 	result := append(realArray, resolveTask)
 	*this.resolveTasks = result
+}
+
+func UniqueKey(collection string, id string) string {
+	return collection + "." + id
 }
 
 func resolveFilters(expansion, fields string) (expansionFilter Filters, fieldFilter Filters, recursiveExpansion bool, err error) {
@@ -183,9 +207,16 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 }
 
 func executeExpansionTasks(walkStateHolder WalkStateHolder) {
-	resolveTasks := walkStateHolder.GetExpansionTasks()
-	for _, task := range resolveTasks {
-		link := buildReferenceURI(reflect.ValueOf(task.DBRef))
+	if ExpanderConfig.MakeBulkRequest {
+		executeExpansionTasksInBulks(walkStateHolder.GetExpansionTasks())
+	} else {
+		executeExpansionTasksOneByOne(walkStateHolder.GetExpansionTasks())
+	}
+}
+
+func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask) {
+	for _, task := range expansionTasks {
+		link := buildReferenceURI(reflect.ValueOf(task.OriginalDBRef))
 		value, ok := getResourceFrom(link, Filters{}, true)
 		if !ok && task.Error != nil {
 			task.Error()
@@ -193,6 +224,50 @@ func executeExpansionTasks(walkStateHolder WalkStateHolder) {
 			task.Success(value)
 		}
 	}
+}
+
+func executeExpansionTasksInBulks(expansionTasks []ExpansionTask) {
+	perCollectionIds := make(map[string]string)
+	for _, task := range expansionTasks {
+		perCollectionIds[task.Collection] += task.Id + ","
+	}
+
+	callResults := make(map[string]interface{})
+	for collection, idList := range perCollectionIds {
+
+		callURL := ExpanderConfig.IdURIs[collection] + idList
+		url, _ := url.ParseRequestURI(callURL)
+		value := getContentFrom(url)
+		ok := true
+		if ok {
+			bytes := []byte(value)
+
+			var response BulkResponseMongoObject
+			var responseData BulkResponseData
+
+			_ = json.Unmarshal(bytes, &response)
+			_ = json.Unmarshal(bytes, &responseData)
+
+			for index, mongoObject := range response.Data {
+				callResults[mongoObject.Id] = responseData.Data[index]
+			}
+
+		} else {
+			fmt.Println("Could not resolve URL ", callURL)
+
+		}
+	}
+
+	for _, expansionTask := range expansionTasks {
+		value, ok := callResults[expansionTask.Id]
+
+		if ok && expansionTask.Success != nil {
+			expansionTask.Success(value.(map[string]interface{}))
+		} else if expansionTask.Error != nil {
+			expansionTask.Error()
+		}
+	}
+
 }
 
 func ExpandArray(data interface{}, expansion, fields string) []interface{} {
@@ -324,7 +399,9 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 
 		var resolveTask ExpansionTask
 
-		resolveTask.DBRef = dbref
+		resolveTask.OriginalDBRef = dbref
+		resolveTask.Id = dbref.Id.(ObjectId).Hex()
+		resolveTask.Collection = dbref.Collection
 		resolveTask.Success = func(value map[string]interface{}) {
 			for k, v := range value {
 				placeholder[k] = v
@@ -363,7 +440,9 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 			if filters.Contains(key) || recursive {
 
 				var resolveTask ExpansionTask
-				resolveTask.DBRef = dbref
+				resolveTask.OriginalDBRef = dbref
+				resolveTask.Id = dbref.Id.(ObjectId).Hex()
+				resolveTask.Collection = dbref.Collection
 				resolveTask.Success = func(value map[string]interface{}) {
 					writeToResult(key, value, omitempty)
 				}
@@ -438,7 +517,9 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 
 					var resolveTask ExpansionTask
 					var localCounter = i
-					resolveTask.DBRef = dbref
+					resolveTask.OriginalDBRef = dbref
+					resolveTask.Id = dbref.Id.(ObjectId).Hex()
+					resolveTask.Collection = dbref.Collection
 					resolveTask.Success = func(resolvedValue map[string]interface{}) {
 						result[localCounter] = resolvedValue
 					}
@@ -524,28 +605,6 @@ func expandChildren(m map[string]interface{}, filters Filters, recursive bool) m
 	}
 
 	return result
-}
-
-func buildDBReference(t reflect.Value) DBRef {
-	var ref DBRef
-
-	if t.Kind() == reflect.Struct {
-		for i := 0; i < t.NumField(); i++ {
-			f := t.Field(i)
-			ft := t.Type().Field(i)
-
-			if ft.Name == COLLECTION_KEY {
-				ref.Collection = f.String()
-			} else {
-				objectId, ok := f.Interface().(ObjectId)
-				if ok {
-					ref.Id = objectId
-				}
-			}
-		}
-	}
-
-	return ref
 }
 
 func buildReferenceURI(t reflect.Value) string {
