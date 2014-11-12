@@ -511,7 +511,7 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 					if ok {
 						result[i] = resource
 					}
-				} else if dbref, ok := asMongoDBRef(current); ok && recursive {
+				} else if dbref, ok := asMongoDBRef(current); ok {
 					//leave as placeholder
 					result = append(result, current.Interface())
 
