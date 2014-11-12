@@ -17,6 +17,9 @@ import (
 	"github.com/golang/groupcache/lru"
 )
 
+// TODO:
+// 1. add filters to expansiontask in order to correctly resolve children
+// 2. fix other TODOs
 const (
 	REF_KEY        = "ref"
 	REL_KEY        = "rel"
@@ -199,25 +202,25 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 	resolveTasks := []ExpansionTask{}
 	walkStateHolder := WalkStateHolder{&resolveTasks}
 	expanded := walkByExpansion(data, walkStateHolder, expansionFilter, recursiveExpansion)
-	executeExpansionTasks(walkStateHolder)
+	executeExpansionTasks(walkStateHolder, recursiveExpansion)
 
 	filtered := walkByFilter(expanded, fieldFilter)
 
 	return filtered
 }
 
-func executeExpansionTasks(walkStateHolder WalkStateHolder) {
+func executeExpansionTasks(walkStateHolder WalkStateHolder, recursive bool) {
 	if ExpanderConfig.MakeBulkRequest {
 		executeExpansionTasksInBulks(walkStateHolder.GetExpansionTasks())
 	} else {
-		executeExpansionTasksOneByOne(walkStateHolder.GetExpansionTasks())
+		executeExpansionTasksOneByOne(walkStateHolder.GetExpansionTasks(), recursive)
 	}
 }
 
-func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask) {
+func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask, recursive bool) {
 	for _, task := range expansionTasks {
 		link := buildReferenceURI(reflect.ValueOf(task.OriginalDBRef))
-		value, ok := getResourceFrom(link, Filters{}, true)
+		value, ok := getResourceFrom(link, Filters{}, recursive)
 		if !ok && task.Error != nil {
 			task.Error()
 		} else if task.Success != nil {
@@ -306,7 +309,7 @@ func ExpandArray(data interface{}, expansion, fields string) []interface{} {
 		resolveTasks := []ExpansionTask{}
 		walkStateHolder := WalkStateHolder{&resolveTasks}
 		arrayItem := walkByExpansion(v.Index(i), walkStateHolder, expansionFilter, recursiveExpansion)
-		executeExpansionTasks(walkStateHolder)
+		executeExpansionTasks(walkStateHolder, recursiveExpansion)
 		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
 	}
@@ -693,6 +696,7 @@ func hasReference(m map[string]interface{}) bool {
 		if ft != nil && ft.Kind() == reflect.Map {
 			child := v.(map[string]interface{})
 			_, ok := child[REF_KEY]
+			ok = ok && len(child) > 1
 
 			if ok {
 				return true
