@@ -15,7 +15,7 @@ func TestExpander(t *testing.T) {
 
 	Convey("It should walk the given object and identify it's type:", t, func() {
 		Convey("Walking the type should return empty key-values if the object is nil", func() {
-			result := Expand(nil, "", "")
+			result := Expand(nil, "", "", make(map[string]string))
 
 			So(result, ShouldBeEmpty)
 		})
@@ -29,7 +29,7 @@ func TestExpander(t *testing.T) {
 			expectedMap["UI"] = 1
 
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
-			result := Expand(singleLevel, "*", "")
+			result := Expand(singleLevel, "*", "", make(map[string]string))
 
 			So(result["S"], ShouldEqual, expectedMap["S"])
 			So(result["B"], ShouldEqual, expectedMap["B"])
@@ -46,7 +46,7 @@ func TestExpander(t *testing.T) {
 			time, _ := strconv.Unquote(string(t))
 			expectedMap["Time"] = time
 
-			result := Expand(simpleWithTime, "*", "")
+			result := Expand(simpleWithTime, "*", "", make(map[string]string))
 
 			So(result["Name"], ShouldEqual, expectedMap["Name"])
 			So(result["Time"], ShouldEqual, expectedMap["Time"])
@@ -61,7 +61,7 @@ func TestExpander(t *testing.T) {
 			expectedMap["UI"] = 1
 
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
-			result := Expand(singleLevel, "*", "")
+			result := Expand(singleLevel, "*", "", make(map[string]string))
 
 			So(result["S"], ShouldEqual, expectedMap["S"])
 			So(result["B"], ShouldEqual, expectedMap["B"])
@@ -77,7 +77,7 @@ func TestExpander(t *testing.T) {
 			expectedMap["MSB"] = expectedMsb
 
 			singleMultiLevel := SimpleMultiLevel{expectedMap["SI"].([]int), expectedMap["MSB"].(map[string]bool)}
-			result := Expand(singleMultiLevel, "*", "")
+			result := Expand(singleMultiLevel, "*", "", make(map[string]string))
 
 			So(result["SI"], ShouldContain, 1)
 			So(result["SI"], ShouldContain, 2)
@@ -104,7 +104,7 @@ func TestExpander(t *testing.T) {
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
 			complexSingleLevel := ComplexSingleLevel{S: expectedMap["S"].(string), SSL: singleLevel}
 
-			result := Expand(complexSingleLevel, "*", "")
+			result := Expand(complexSingleLevel, "*", "", make(map[string]string))
 			ssl := result["SSL"].(map[string]interface{})
 
 			So(result["S"], ShouldEqual, expectedMap["S"])
@@ -344,7 +344,7 @@ func TestExpander(t *testing.T) {
 		Convey("Filtering should return the full map when no Filters is given", func() {
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
 
-			result := Expand(singleLevel, "", "")
+			result := Expand(singleLevel, "", "", make(map[string]string))
 
 			So(result["S"], ShouldEqual, singleLevel.S)
 		})
@@ -352,7 +352,7 @@ func TestExpander(t *testing.T) {
 		Convey("Filtering should return the filtered fields in simple object as map when first-level Filters given", func() {
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
 
-			result := Expand(singleLevel, "", "S, I")
+			result := Expand(singleLevel, "", "S, I", make(map[string]string))
 
 			So(result["S"], ShouldEqual, singleLevel.S)
 			So(result["I"], ShouldEqual, singleLevel.I)
@@ -376,7 +376,7 @@ func TestExpander(t *testing.T) {
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
 			complexSingleLevel := ComplexSingleLevel{S: expectedMap["S"].(string), SSL: singleLevel}
 
-			result := Expand(complexSingleLevel, "", "S,SSL(B, F, UI)")
+			result := Expand(complexSingleLevel, "", "S,SSL(B, F, UI)", make(map[string]string))
 			ssl := result["SSL"].(map[string]interface{})
 
 			So(result["S"], ShouldEqual, complexSingleLevel.S)
@@ -504,7 +504,7 @@ func TestExpander(t *testing.T) {
 		Convey("Fetching should return the same value when Mongo flag is not set", func() {
 			simple := SimpleWithDBRef{Name: "foo", Ref: DBRef{"a collection", "an id", "a database"}}
 
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Ref"].(map[string]interface{})
 			So(result["name"], ShouldEqual, simple.Name)
 			So(mongoRef["Collection"], ShouldEqual, simple.Ref.Collection)
@@ -516,7 +516,7 @@ func TestExpander(t *testing.T) {
 			emptyStringValue := ""
 			simple := SimpleWithDBRef{Name: emptyStringValue, Ref: DBRef{"a collection", "an id", "a database"}}
 
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Ref"].(map[string]interface{})
 
 			_, ok := result["name"]
@@ -530,7 +530,7 @@ func TestExpander(t *testing.T) {
 			simple := SimpleWithDBRef{Name: "foo", Ref: DBRef{"a collection", "an id", "a database"}}
 
 			ExpanderConfig = Configuration{UsingMongo: false}
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Ref"].(map[string]interface{})
 
 			So(result["name"], ShouldEqual, simple.Name)
@@ -543,7 +543,7 @@ func TestExpander(t *testing.T) {
 			simple := SimpleWithDBRef{Name: "foo", Ref: DBRef{"a collection", MongoId("123"), "a database"}}
 
 			ExpanderConfig = Configuration{UsingMongo: true}
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Ref"].(map[string]interface{})
 
 			So(result["name"], ShouldEqual, simple.Name)
@@ -559,12 +559,12 @@ func TestExpander(t *testing.T) {
 
 			ExpanderConfig = Configuration{UsingMongo: true, IdURIs: uris}
 			mockedFn := getContentFrom
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				result, _ := json.Marshal(info)
 				return string(result)
 			}
 
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Ref"].(map[string]interface{})
 
 			So(result["name"], ShouldEqual, simple.Name)
@@ -590,12 +590,12 @@ func TestExpander(t *testing.T) {
 
 			ExpanderConfig = Configuration{UsingMongo: true, IdURIs: uris}
 			mockedFn := getContentFrom
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				result, _ := json.Marshal(info)
 				return string(result)
 			}
 
-			result := Expand(simple, "*", "")
+			result := Expand(simple, "*", "", make(map[string]string))
 			mongoRef := result["Refs"].([]interface{})
 			child1 := mongoRef[0].(map[string]interface{})
 			child2 := mongoRef[1].(map[string]interface{})
@@ -606,6 +606,26 @@ func TestExpander(t *testing.T) {
 			So(child2["Name"], ShouldEqual, info.Name)
 			So(child2["Age"], ShouldEqual, info.Age)
 
+			getContentFrom = mockedFn
+		})
+
+		Convey("Fetching should pass the provided headers to the getContentFrom function", func() {
+			simple := SimpleWithDBRef{Name: "foo", Ref: DBRef{"a collection", MongoId("123"), "a database"}}
+			info := Info{"A name", 100}
+			uris := map[string]string{simple.Ref.Collection: "http://some-uri/id"}
+
+			ExpanderConfig = Configuration{UsingMongo: true, IdURIs: uris}
+			mockedFn := getContentFrom
+			getContentFrom = func(url *url.URL, headers map[string]string) string {
+				if val, ok := headers["someHeader"]; !ok {
+					t.Error("Header 'someHeader' should be 'someValue' but was:", val)
+				}
+
+				result, _ := json.Marshal(info)
+				return string(result)
+			}
+
+			_ = Expand(simple, "*", "", map[string]string{"someHeader": "someValue"})
 			getContentFrom = mockedFn
 		})
 	})
@@ -632,7 +652,7 @@ func TestExpander(t *testing.T) {
 		mockedFn := getContentFrom
 
 		apiCallCounter := 0
-		getContentFrom = func(murl *url.URL) string {
+		getContentFrom = func(murl *url.URL, _ map[string]string) string {
 			apiCallCounter++
 			var bulkResponse struct {
 				Data []interface{} `json:"data"`
@@ -647,7 +667,7 @@ func TestExpander(t *testing.T) {
 			result, _ := json.Marshal(bulkResponse)
 			return string(result)
 		}
-		result := Expand(simple, "*", "")
+		result := Expand(simple, "*", "", make(map[string]string))
 
 		fmt.Println()
 		mongoRef := result["Refs"].([]interface{})
@@ -673,12 +693,12 @@ func TestExpander(t *testing.T) {
 			info := Info{"A name", 100}
 
 			mockedFn := getContentFrom
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				result, _ := json.Marshal(info)
 				return string(result)
 			}
 
-			result := Expand(singleLevel, "*,((", "")
+			result := Expand(singleLevel, "*,((", "", make(map[string]string))
 			actual := result["L"].(map[string]interface{})
 
 			//still same after expansion, because filter is invalid
@@ -690,7 +710,7 @@ func TestExpander(t *testing.T) {
 		Convey("open brackets shouldbe handled as invalid filter and not apply filter", func() {
 			singleLevel := SimpleSingleLevel{S: "bar", B: false, I: -1, F: 1.1, UI: 1}
 
-			result := Expand(singleLevel, "", "S, I,((")
+			result := Expand(singleLevel, "", "S, I,((", make(map[string]string))
 
 			So(result["S"], ShouldEqual, singleLevel.S)
 			So(result["I"], ShouldEqual, singleLevel.I)
@@ -704,7 +724,7 @@ func TestExpander(t *testing.T) {
 		Convey("Fetching should return the same value when non-URI data structure given", func() {
 			singleLevel := SimpleSingleLevel{L: Link{Ref: "non-URI", Rel: "nothing", Verb: "GET"}}
 
-			result := Expand(singleLevel, "*", "")
+			result := Expand(singleLevel, "*", "", make(map[string]string))
 			actual := result["L"].(map[string]interface{})
 
 			So(actual["ref"], ShouldEqual, singleLevel.L.Ref)
@@ -715,7 +735,7 @@ func TestExpander(t *testing.T) {
 		Convey("Fetching should return the same value when non-URI data structure given", func() {
 			singleLevel := SimpleSingleLevel{L: Link{Ref: "non-URI", Rel: "nothing", Verb: "GET"}}
 
-			result := Expand(singleLevel, "*", "")
+			result := Expand(singleLevel, "*", "", make(map[string]string))
 			actual := result["L"].(map[string]interface{})
 
 			So(actual["ref"], ShouldEqual, singleLevel.L.Ref)
@@ -728,12 +748,12 @@ func TestExpander(t *testing.T) {
 			info := Info{"A name", 100}
 
 			mockedFn := getContentFrom
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				result, _ := json.Marshal(info)
 				return string(result)
 			}
 
-			result := Expand(singleLevel, "*", "")
+			result := Expand(singleLevel, "*", "", make(map[string]string))
 			actual := result["L"].(map[string]interface{})
 
 			So(actual["Name"], ShouldEqual, info.Name)
@@ -755,7 +775,7 @@ func TestExpander(t *testing.T) {
 
 			mockedFn := getContentFrom
 			index := 0
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				result, _ := json.Marshal(info[index])
 				index = index + 1
 				return string(result)
@@ -763,7 +783,7 @@ func TestExpander(t *testing.T) {
 
 			simpleWithLinks := SimpleWithLinks{"something", links}
 
-			result := Expand(simpleWithLinks, "*", "")
+			result := Expand(simpleWithLinks, "*", "", make(map[string]string))
 			members := result["Members"].([]interface{})
 
 			So(result["Name"], ShouldEqual, simpleWithLinks.Name)
@@ -785,7 +805,7 @@ func TestExpander(t *testing.T) {
 
 			mockedFn := getContentFrom
 			index := 0
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				var result []byte
 				if index > 0 {
 					result, _ = json.Marshal(info)
@@ -796,7 +816,7 @@ func TestExpander(t *testing.T) {
 				return string(result)
 			}
 
-			result := Expand(singleLevel1, "*", "")
+			result := Expand(singleLevel1, "*", "", make(map[string]string))
 			parent := result["L"].(map[string]interface{})
 			child := parent["L"].(map[string]interface{})
 
@@ -813,13 +833,13 @@ func TestExpander(t *testing.T) {
 			singleLevel2 := SimpleSingleLevel{S: "two", L: Link{Ref: "http://valid2/info", Rel: "nothing2", Verb: "GET"}}
 
 			mockedFn := getContentFrom
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				var result []byte
 				result, _ = json.Marshal(singleLevel2)
 				return string(result)
 			}
 
-			result := Expand(singleLevel1, "L", "")
+			result := Expand(singleLevel1, "L", "", make(map[string]string))
 			parent := result["L"].(map[string]interface{})
 			child := parent["L"].(map[string]interface{})
 
@@ -844,7 +864,7 @@ func TestExpander(t *testing.T) {
 
 			mockedFn := getContentFrom
 			index := 0
-			getContentFrom = func(url *url.URL) string {
+			getContentFrom = func(url *url.URL, _ map[string]string) string {
 				var result []byte
 				index = index + 1
 				if index%2 == 0 {
@@ -855,7 +875,7 @@ func TestExpander(t *testing.T) {
 				return string(result)
 			}
 
-			result := Expand(simpleWithLinks, "Members(L)", "Name,Members(S,L)")
+			result := Expand(simpleWithLinks, "Members(L)", "Name,Members(S,L)", make(map[string]string))
 			parent := result["Members"].([]interface{})
 
 			So(len(result), ShouldEqual, 2)
@@ -878,7 +898,7 @@ func TestExpander(t *testing.T) {
 				expectedItem3 := Info{"C name", 100}
 				expectedArray := []Info{expectedItem1, expectedItem2, expectedItem3}
 
-				result := ExpandArray(expectedArray, "*", "")
+				result := ExpandArray(expectedArray, "*", "", make(map[string]string))
 
 				So(len(result), ShouldEqual, 3)
 				result1 := result[0].(map[string]interface{})
@@ -896,7 +916,7 @@ func TestExpander(t *testing.T) {
 				expectedItem3 := Info{"C name", 102}
 				expectedArray := []Info{expectedItem1, expectedItem2, expectedItem3}
 
-				result := ExpandArray(expectedArray, "*", "Age")
+				result := ExpandArray(expectedArray, "*", "Age", make(map[string]string))
 
 				So(len(result), ShouldEqual, 3)
 				result1 := result[0].(map[string]interface{})
@@ -920,7 +940,7 @@ func TestExpander(t *testing.T) {
 
 				ExpanderConfig = Configuration{UsingMongo: true, IdURIs: uris}
 				mockedFn := getContentFrom
-				getContentFrom = func(url *url.URL) string {
+				getContentFrom = func(url *url.URL, _ map[string]string) string {
 					fmt.Println(url)
 					if url.Path == "/id/123" {
 						result, _ := json.Marshal(info1)
@@ -931,7 +951,7 @@ func TestExpander(t *testing.T) {
 					}
 				}
 
-				result := ExpandArray(items, "*", "")
+				result := ExpandArray(items, "*", "", make(map[string]string))
 				So(len(result), ShouldEqual, len(infos))
 
 				result1 := result[0].(map[string]interface{})
@@ -950,12 +970,12 @@ func TestExpander(t *testing.T) {
 				info := Info{"A name", 100}
 
 				mockedFn := getContentFrom
-				makeGetCall = func(url *url.URL) string {
+				makeGetCall = func(url *url.URL, _ map[string]string) string {
 					result, _ := json.Marshal(info)
 					return string(result)
 				}
 
-				result := Expand(singleLevel, "*", "")
+				result := Expand(singleLevel, "*", "", make(map[string]string))
 				actual := result["L"].(map[string]interface{})
 
 				So(actual["Name"], ShouldEqual, info.Name)
@@ -968,12 +988,12 @@ func TestExpander(t *testing.T) {
 				info := Info{"A name", 100}
 
 				mockedFn := getContentFrom
-				makeGetCall = func(url *url.URL) string {
+				makeGetCall = func(url *url.URL, _ map[string]string) string {
 					//this should not be called, so return invalid data to make the test fail in case it is called:
 					return "INVALID_DATA"
 				}
 
-				result := Expand(singleLevel, "*", "")
+				result := Expand(singleLevel, "*", "", make(map[string]string))
 				actual := result["L"].(map[string]interface{})
 
 				So(actual["Name"], ShouldEqual, info.Name)
@@ -993,12 +1013,12 @@ func TestExpander(t *testing.T) {
 				Cache.Add(uri, CacheEntry{Timestamp: expiredTimestamp, Data: invalidData})
 
 				mockedFn := getContentFrom
-				makeGetCall = func(url *url.URL) string {
+				makeGetCall = func(url *url.URL, _ map[string]string) string {
 					result, _ := json.Marshal(info)
 					return string(result)
 				}
 
-				result := Expand(singleLevel, "*", "")
+				result := Expand(singleLevel, "*", "", make(map[string]string))
 				actual := result["L"].(map[string]interface{})
 
 				So(actual["Name"], ShouldEqual, info.Name)

@@ -62,7 +62,7 @@ func dialTimeout(network, addr string) (net.Conn, error) {
 func Init() {
 	client = http.Client{}
 
-	client.Timeout = time.Duration(ExpanderConfig.ConnectionTimeoutInS) * time.Second
+	client.Timeout = time.Duration(ExpanderConfig.ConnectionTimeoutInS)*time.Second
 
 	httpClientIsInitialized = true
 }
@@ -184,7 +184,7 @@ func resolveFilters(expansion, fields string) (expansionFilter Filters, fieldFil
 }
 
 //TODO: TagFields & BSONFields
-func Expand(data interface{}, expansion, fields string) map[string]interface{} {
+func Expand(data interface{}, expansion, fields string, headers map[string] string) map[string]interface{} {
 	if ExpanderConfig.UsingMongo && len(ExpanderConfig.IdURIs) == 0 {
 		fmt.Println("Warning: Cannot use mongo flag without proper IdURIs given!")
 	}
@@ -202,25 +202,25 @@ func Expand(data interface{}, expansion, fields string) map[string]interface{} {
 	resolveTasks := []ExpansionTask{}
 	walkStateHolder := WalkStateHolder{&resolveTasks}
 	expanded := walkByExpansion(data, walkStateHolder, expansionFilter, recursiveExpansion)
-	executeExpansionTasks(walkStateHolder, recursiveExpansion)
+	executeExpansionTasks(walkStateHolder, recursiveExpansion, headers)
 
 	filtered := walkByFilter(expanded, fieldFilter)
 
 	return filtered
 }
 
-func executeExpansionTasks(walkStateHolder WalkStateHolder, recursive bool) {
+func executeExpansionTasks(walkStateHolder WalkStateHolder, recursive bool, headers map[string]string) {
 	if ExpanderConfig.MakeBulkRequest {
-		executeExpansionTasksInBulks(walkStateHolder.GetExpansionTasks())
+		executeExpansionTasksInBulks(walkStateHolder.GetExpansionTasks(), headers)
 	} else {
-		executeExpansionTasksOneByOne(walkStateHolder.GetExpansionTasks(), recursive)
+		executeExpansionTasksOneByOne(walkStateHolder.GetExpansionTasks(), recursive, headers)
 	}
 }
 
-func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask, recursive bool) {
+func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask, recursive bool, headers map[string]string) {
 	for _, task := range expansionTasks {
 		link := buildReferenceURI(reflect.ValueOf(task.OriginalDBRef))
-		value, ok := getResourceFrom(link, Filters{}, recursive)
+		value, ok := getResourceFrom(link, Filters{}, recursive, headers)
 		if !ok && task.Error != nil {
 			task.Error()
 		} else if task.Success != nil {
@@ -229,10 +229,10 @@ func executeExpansionTasksOneByOne(expansionTasks []ExpansionTask, recursive boo
 	}
 }
 
-func executeExpansionTasksInBulks(expansionTasks []ExpansionTask) {
+func executeExpansionTasksInBulks(expansionTasks []ExpansionTask, headers map[string]string) {
 	perCollectionIds := make(map[string]string)
 	for _, task := range expansionTasks {
-		perCollectionIds[task.Collection] += task.Id + ","
+		perCollectionIds[task.Collection] += task.Id+","
 	}
 
 	callResults := make(map[string]interface{})
@@ -240,7 +240,7 @@ func executeExpansionTasksInBulks(expansionTasks []ExpansionTask) {
 
 		callURL := ExpanderConfig.IdURIs[collection] + idList
 		url, _ := url.ParseRequestURI(callURL)
-		value := getContentFrom(url)
+		value := getContentFrom(url, headers)
 		ok := true
 		if ok {
 			bytes := []byte(value)
@@ -273,7 +273,7 @@ func executeExpansionTasksInBulks(expansionTasks []ExpansionTask) {
 
 }
 
-func ExpandArray(data interface{}, expansion, fields string) []interface{} {
+func ExpandArray(data interface{}, expansion, fields string, headers map[string]string) []interface{} {
 	if ExpanderConfig.UsingMongo && len(ExpanderConfig.IdURIs) == 0 {
 		fmt.Println("Warning: Cannot use mongo flag without proper IdURIs given!")
 	}
@@ -309,7 +309,7 @@ func ExpandArray(data interface{}, expansion, fields string) []interface{} {
 		resolveTasks := []ExpansionTask{}
 		walkStateHolder := WalkStateHolder{&resolveTasks}
 		arrayItem := walkByExpansion(v.Index(i), walkStateHolder, expansionFilter, recursiveExpansion)
-		executeExpansionTasks(walkStateHolder, recursiveExpansion)
+		executeExpansionTasks(walkStateHolder, recursiveExpansion, headers)
 		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
 	}
@@ -345,23 +345,23 @@ func walkByFilter(data map[string]interface{}, filters Filters) map[string]inter
 				switch ft.Index(0).Kind() {
 				case reflect.Map:
 					children := make([]map[string]interface{}, 0)
-					for _, child := range v.([]map[string]interface{}) {
-						item := walkByFilter(child, subFilters)
-						children = append(children, item)
-					}
+				for _, child := range v.([]map[string]interface{}) {
+					item := walkByFilter(child, subFilters)
+					children = append(children, item)
+				}
 					result[k] = children
 				default:
 					children := make([]interface{}, 0)
-					for _, child := range v.([]interface{}) {
-						cft := reflect.TypeOf(child)
+				for _, child := range v.([]interface{}) {
+					cft := reflect.TypeOf(child)
 
-						if cft.Kind() == reflect.Map {
-							item := walkByFilter(child.(map[string]interface{}), subFilters)
-							children = append(children, item)
-						} else {
-							children = append(children, child)
-						}
+					if cft.Kind() == reflect.Map {
+						item := walkByFilter(child.(map[string]interface{}), subFilters)
+						children = append(children, item)
+					} else {
+						children = append(children, child)
 					}
+				}
 					result[k] = children
 				}
 			}
@@ -471,7 +471,7 @@ func walkByExpansion(data interface{}, walkStateHolder WalkStateHolder, filters 
 			if isReference(f) {
 				if filters.Contains(key) || recursive {
 					uri := getReferenceURI(f)
-					resource, ok := getResourceFrom(uri, filters.Get(key).Children, recursive)
+					resource, ok := getResourceFrom(uri, filters.Get(key).Children, recursive, make(map[string]string))
 					if ok {
 						writeToResult(key, resource, omitempty)
 					}
@@ -510,7 +510,7 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 
 					//TODO: this fails in case the resource cannot be resolved, because current is DBRef not map[string]interface{}
 					result = append(result, current.Interface())
-					resource, ok := getResourceFrom(uri, filters.Get(parentKey).Children, recursive)
+					resource, ok := getResourceFrom(uri, filters.Get(parentKey).Children, recursive, make(map[string]string))
 					if ok {
 						result[i] = resource
 					}
@@ -540,10 +540,10 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 	case reflect.Map:
 		result := make(map[string]interface{})
 
-		for _, v := range t.MapKeys() {
-			key := v.Interface().(string)
-			result[key] = getValue(t.MapIndex(v), walkStateHolder, filters.Get(key).Children, options)
-		}
+	for _, v := range t.MapKeys() {
+		key := v.Interface().(string)
+		result[key] = getValue(t.MapIndex(v), walkStateHolder, filters.Get(key).Children, options)
+	}
 
 		return result
 	case reflect.Struct:
@@ -565,27 +565,27 @@ func getValue(t reflect.Value, walkStateHolder WalkStateHolder, filters Filters,
 	return ""
 }
 
-func getResourceFrom(u string, filters Filters, recursive bool) (map[string]interface{}, bool) {
+func getResourceFrom(u string, filters Filters, recursive bool, headers map[string]string) (map[string]interface{}, bool) {
 	ok := false
 	uri, err := url.ParseRequestURI(u)
 	var m map[string]interface{}
 
 	if err == nil {
-		content := getContentFrom(uri)
+		content := getContentFrom(uri, headers)
 		err := json.Unmarshal([]byte(content), &m)
 		if err != nil {
 			return m, false
 		}
 		ok = true
 		if hasReference(m) {
-			return expandChildren(m, filters, recursive), ok
+			return expandChildren(m, filters, recursive, headers), ok
 		}
 	}
 
 	return m, ok
 }
 
-func expandChildren(m map[string]interface{}, filters Filters, recursive bool) map[string]interface{} {
+func expandChildren(m map[string]interface{}, filters Filters, recursive bool, headers map[string]string) map[string]interface{} {
 	result := make(map[string]interface{})
 
 	for key, v := range m {
@@ -599,7 +599,7 @@ func expandChildren(m map[string]interface{}, filters Filters, recursive bool) m
 			uri, found := child[REF_KEY]
 
 			if found {
-				resource, ok := getResourceFrom(uri.(string), filters, recursive)
+				resource, ok := getResourceFrom(uri.(string), filters, recursive, headers)
 				if ok {
 					result[key] = resource
 				}
@@ -625,7 +625,7 @@ func buildReferenceURI(t reflect.Value) string {
 				objectId, ok := f.Interface().(ObjectId)
 				if ok {
 					base := ExpanderConfig.IdURIs[collection]
-					uri = base + "/" + objectId.Hex()
+					uri = base+"/"+objectId.Hex()
 				}
 			}
 		}
@@ -723,7 +723,7 @@ func getReferenceURI(t reflect.Value) string {
 	return ""
 }
 
-var makeGetCall = func(uri *url.URL) string {
+var makeGetCall = func(uri *url.URL, headers map[string]string) string {
 	if !httpClientIsInitialized {
 		initializerMutex.Lock()
 		if !initializingHttpClient {
@@ -733,7 +733,16 @@ var makeGetCall = func(uri *url.URL) string {
 		initializerMutex.Unlock()
 	}
 
-	response, err := client.Get(uri.String())
+	req, err := http.NewRequest("GET", uri.String(), nil)
+	if err != nil {
+		fmt.Println(err)
+		return ""
+	}
+
+	for k, v := range headers {
+		req.Header.Add(k, v)
+	}
+	response, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
 		return ""
@@ -749,8 +758,8 @@ var makeGetCall = func(uri *url.URL) string {
 	return string(contents)
 }
 
-var makeGetCallAndAddToCache = func(uri *url.URL) string {
-	valueToReturn := makeGetCall(uri)
+var makeGetCallAndAddToCache = func(uri *url.URL, headers map[string]string) string {
+	valueToReturn := makeGetCall(uri, headers)
 
 	var responseMap map[string]interface{}
 	err := json.Unmarshal([]byte(valueToReturn), &responseMap)
@@ -770,14 +779,14 @@ var makeGetCallAndAddToCache = func(uri *url.URL) string {
 	return valueToReturn
 }
 
-var getContentFrom = func(uri *url.URL) string {
+var getContentFrom = func(uri *url.URL, headers map[string]string) string {
 	if ExpanderConfig.UsingCache {
 		CacheMutex.Lock()
 		value, ok := Cache.Get(uri.String())
 		CacheMutex.Unlock()
 		if !ok {
 			//no data found in cache
-			return makeGetCallAndAddToCache(uri)
+			return makeGetCallAndAddToCache(uri, headers)
 		}
 
 		cachedData := value.(CacheEntry)
@@ -788,13 +797,13 @@ var getContentFrom = func(uri *url.URL) string {
 			CacheMutex.Lock()
 			Cache.Remove(uri.String())
 			CacheMutex.Unlock()
-			return makeGetCallAndAddToCache(uri)
+			return makeGetCallAndAddToCache(uri, headers)
 		}
 
 		return cachedData.Data
 	}
 
-	return makeGetCall(uri)
+	return makeGetCall(uri, headers)
 }
 
 func validateFilterFormat(filter string) bool {
@@ -840,22 +849,22 @@ func buildFilterTree(statement string) ([]Filter, int) {
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			filter.Children, closeIndex = buildFilterTree(statement[i+1:])
 			result = append(result, filter)
-			i = i + closeIndex
-			indexAfterSeparation = i + 1
+			i = i+closeIndex
+			indexAfterSeparation = i+1
 			closeIndex = indexAfterSeparation
 		case comma:
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			if filter.Value != "" {
 				result = append(result, filter)
 			}
-			indexAfterSeparation = i + 1
+			indexAfterSeparation = i+1
 		case closeBracket:
 			filter := Filter{Value: string(statement[indexAfterSeparation:i])}
 			if filter.Value != "" {
 				result = append(result, filter)
 			}
 
-			return result, i + 1
+			return result, i+1
 		}
 	}
 
