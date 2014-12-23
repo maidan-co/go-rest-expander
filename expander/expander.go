@@ -305,13 +305,16 @@ func ExpandArray(data interface{}, expansion, fields string, headers map[string]
 	}
 
 	v = v.Slice(0, v.Len())
+	resolveTasks := []ExpansionTask{}
+	walkStateHolder := WalkStateHolder{&resolveTasks}
 	for i := 0; i < v.Len(); i++ {
-		resolveTasks := []ExpansionTask{}
-		walkStateHolder := WalkStateHolder{&resolveTasks}
 		arrayItem := walkByExpansion(v.Index(i), walkStateHolder, expansionFilter, recursiveExpansion)
-		executeExpansionTasks(walkStateHolder, recursiveExpansion, headers)
-		arrayItem = walkByFilter(arrayItem, fieldFilter)
 		result = append(result, arrayItem)
+	}
+
+	executeExpansionTasks(walkStateHolder, recursiveExpansion, headers)
+	for i := 0; i < v.Len(); i++ {
+		result[i] = walkByFilter(result[i].(map[string]interface{}), fieldFilter)
 	}
 	return result
 }
